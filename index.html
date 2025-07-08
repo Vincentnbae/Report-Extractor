@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>CASE REPORT 추출기</title>
+  
+  <!-- Tailwind CSS CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Mammoth.js for DOCX parsing -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js"></script>
+  
+  <!-- PDF.js for PDF text extraction -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.15.349/pdf.min.js"></script>
+  <script>
+    // Set worker source for PDF.js
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.15.349/pdf.worker.min.js';
+  </script>
+
+  <style>
+    /* Custom animation for title */
+    @keyframes fadeInDown {
+      from { opacity: 0; transform: translateY(-20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .fade-in-down {
+      animation: fadeInDown 0.5s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-gray-50 flex flex-col items-center py-10 px-4 font-sans">
+
+  <h1 class="text-2xl sm:text-3xl font-bold mb-8 fade-in-down">CASE REPORT 추출기</h1>
+
+  <!-- File Upload Card -->
+  <div id="upload-card" class="w-full max-w-md mb-6 shadow-lg rounded-2xl bg-white">
+    <div class="py-10 flex flex-col items-center gap-4 text-center">
+      <!-- FileUp Icon (SVG) -->
+      <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+        <polyline points="17 8 12 3 7 8"/>
+        <line x1="12" x2="12" y1="3" y2="15"/>
+      </svg>
+      <p class="text-sm text-gray-600">DOC / DOCX / PDF 파일을 업로드하거나 드래그하세요.</p>
+      <input id="file-input" type="file" accept=".doc,.docx,.pdf" class="hidden" />
+      <button id="file-button" class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-2 rounded-full font-semibold">파일 선택하기</button>
+    </div>
+  </div>
+
+  <!-- Status Messages -->
+  <div id="loading-indicator" class="hidden flex items-center gap-2 text-blue-600 mb-6">
+    <!-- Loader Icon (SVG) -->
+    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="animate-spin">
+      <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+    </svg>
+    처리 중...
+  </div>
+  <p id="error-message" class="hidden text-red-600 mb-6"></p>
+  <p id="toast-message" class="hidden text-green-600 mb-6"></p>
+
+  <!-- Result Card -->
+  <div id="result-card" class="hidden w-full max-w-3xl shadow-lg rounded-2xl bg-white">
+    <div class="p-6">
+      <pre id="result-data" class="whitespace-pre-wrap text-sm leading-relaxed max-h-[60vh] overflow-auto mb-4 bg-gray-50 p-4 rounded-md"></pre>
+      <div class="flex gap-3">
+        <button id="copy-button" class="flex-1 bg-blue-500 text-white rounded-full py-2 px-4 flex items-center justify-center font-semibold hover:bg-blue-600">
+          <!-- Copy Icon (SVG) -->
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2">
+            <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
+          </svg>
+          복사하기
+        </button>
+        <button id="download-button" class="flex-1 bg-green-500 text-white rounded-full py-2 px-4 flex items-center justify-center font-semibold hover:bg-green-600">
+          <!-- Download Icon (SVG) -->
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>
+          </svg>
+          다운로드
+        </button>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // DOM Elements
+  const uploadCard = document.getElementById('upload-card');
+  const fileInput = document.getElementById('file-input');
+  const fileButton = document.getElementById('file-button');
+  const loadingIndicator = document.getElementById('loading-indicator');
+  const errorMessage = document.getElementById('error-message');
+  const toastMessage = document.getElementById('toast-message');
+  const resultCard = document.getElementById('result-card');
+  const resultData = document.getElementById('result-data');
+  const copyButton = document.getElementById('copy-button');
+  const downloadButton = document.getElementById('download-button');
+
+  // State variables
+  let currentData = '';
+  let currentFileName = '';
+
+  // Utility functions to format extracted data from DOCX
+  const isPlan = (t) => /femur/i.test(t) && /tibia/i.test(t) && /insert/i.test(t);
+  const isResection = (t) => /distal femur/i.test(t) && /posterior femur/i.test(t);
+
+  const fmtPlan = (tbl) => {
+    const d = { fem:'', tib:'', ins:'', fv:'', tv:'', pca:'', rot:'', flex:'', slope:'' };
+    Array.from(tbl.querySelectorAll('tr')).slice(1).forEach(r => {
+      const c = Array.from(r.querySelectorAll('td')).map(td => td.textContent.trim());
+      const k = (c[0]||'').toLowerCase();
+      if(k==='femur')  [d.fem,d.fv,d.tv]   = [c[1]||'',c[2]||'',c[3]||''];
+      if(k==='tibia')  [d.tib,d.pca,d.rot] = [c[1]||'',c[2]||'',c[3]||''];
+      if(k==='insert') [d.ins,d.flex,d.slope] = [c[1]||'',c[2]||'',c[3]||''];
+    });
+    return [
+      `• Implantation – Femur ${d.fem} | Tibia ${d.tib} | Insert ${d.ins}`,
+      `• Femur varus – ${d.fv}`,
+      `• Tibia varus – ${d.tv}`,
+      `• PCA / TEA – ${d.pca}`,
+      `• Rotation – ${d.rot}`,
+      `• Flexion – ${d.flex}`,
+      `• Posterior Slope – ${d.slope}`
+    ].join('\n');
+  };
+
+  const fmtResection = (tbl) => Array.from(tbl.querySelectorAll('tr')).slice(1)
+    .flatMap(r => {
+      const c = Array.from(r.querySelectorAll('td')).map(td=>td.textContent.trim());
+      const arr=[]; for(let i=0;i<c.length;i+=2) if(c[i+1]) arr.push(`• ${c[i]} – ${c[i+1]}`);
+      return arr;
+    }).join('\n');
+
+  const fmtLigament = (tbl) => {
+    let rows = Array.from(tbl.querySelectorAll('tr')).map(r => Array.from(r.querySelectorAll('td,th')).map(td=>td.textContent.trim()));
+    rows = rows.filter(r => r.some(Boolean));
+    if(!rows.length) return '';
+    if(/ligament balance/i.test(rows[0][0]||'')) rows.shift();
+    const hdr = rows.find(r=>/medial/i.test(r.join(' ')) && /lateral/i.test(r.join(' '))) || ['Label','Medial','Lateral','Varus'];
+    const data = rows.filter(r=>r!==hdr);
+    return data.map(r=>{
+      const vals = hdr.slice(1).map((h,i)=> r[i+1]?`${h} ${r[i+1]}`:'').filter(Boolean).join(' , ');
+      return `${r[0]||'Row'} – ${vals}`;
+    }).join('\n');
+  };
+
+  // UI update functions
+  const showLoading = (isLoading) => {
+    loadingIndicator.classList.toggle('hidden', !isLoading);
+  };
+
+  const showError = (message) => {
+    errorMessage.textContent = message;
+    errorMessage.classList.toggle('hidden', !message);
+  };
+
+  const showToast = (message) => {
+    toastMessage.textContent = message;
+    toastMessage.classList.remove('hidden');
+    setTimeout(() => {
+        toastMessage.classList.add('hidden');
+    }, 2000);
+  };
+  
+  const displayData = (data) => {
+    currentData = data;
+    if (data) {
+      resultData.textContent = data;
+      resultCard.classList.remove('hidden');
+    } else {
+      resultCard.classList.add('hidden');
+    }
+  };
+
+  // Core logic functions
+  const extractPdfText = async (arrayBuffer) => {
+    const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) }).promise;
+    let txt = '';
+    for (let p = 1; p <= pdf.numPages; p++) {
+      const page = await pdf.getPage(p);
+      const tc = await page.getTextContent();
+      txt += tc.items.map(it => it.str).join(' ') + '\n';
+    }
+    return txt.trim();
+  };
+
+  const copyText = async () => {
+    if (!currentData) return;
+    try {
+      await navigator.clipboard.writeText(currentData);
+      showToast('복사되었습니다');
+    } catch (err) {
+      // The modern clipboard API failed, likely due to iframe security restrictions.
+      // We will now use the fallback `execCommand` method.
+      // The console.error call was removed to prevent user confusion.
+      const ta = document.createElement('textarea');
+      ta.value = currentData;
+      ta.style.position = 'fixed'; // Avoid scrolling to bottom
+      ta.style.opacity = 0;
+      document.body.appendChild(ta);
+      ta.select();
+      try {
+        document.execCommand('copy');
+        showToast('복사되었습니다');
+      } catch (e) {
+        showError('복사에 실패했습니다.');
+      }
+      document.body.removeChild(ta);
+    }
+  };
+
+  const downloadTxt = () => {
+    if (!currentData) return;
+    const base = (currentFileName && currentFileName.replace(/\.[^/.]+$/, '')) || 'report';
+    const blob = new Blob([currentData], { type: 'text/plain;charset=utf-8' });
+
+    if (window.navigator.msSaveBlob) { // For IE / old Edge
+      window.navigator.msSaveBlob(blob, `${base}_report.txt`);
+      return;
+    }
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${base}_report.txt`;
+    document.body.appendChild(a);
+    a.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    }, 100);
+  };
+
+  const handleFile = async (file) => {
+    if (!file) return;
+
+    // Reset UI before processing
+    showLoading(true);
+    showError('');
+    displayData('');
+    currentFileName = file.name;
+
+    try {
+      const arrayBuffer = await file.arrayBuffer();
+
+      // Handle DOCX files
+      if (/(docx?|msword|officedocument)/i.test(file.type) || /\.docx?$/i.test(file.name)) {
+        if (!window.mammoth) throw new Error('mammoth.js is not loaded yet.');
+        
+        const { value: html } = await window.mammoth.convertToHtml({ arrayBuffer });
+        const { value: raw } = await window.mammoth.extractRawText({ arrayBuffer });
+        
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        const tables = Array.from(doc.querySelectorAll('table'));
+        
+        const planTables = tables.filter(t => isPlan(t.textContent.toLowerCase()));
+        const resectionTables = tables.filter(t => isResection(t.textContent.toLowerCase()));
+        
+        const pickTable = (keyword) => tables.find(t => (t.querySelector('td,th')?.textContent || '').toLowerCase().includes(keyword.toLowerCase()));
+        
+        const ligamentTables = [
+            pickTable('Pre-Resection Ligament Balance'),
+            pickTable('Post Resection Final Ligament Balance')
+        ].map(t => t ? fmtLigament(t) : '표 없음');
+
+        const separator = '='.repeat(60);
+        const output = ['◆◆◆ CASE REPORT Result ◆◆◆', ''];
+        
+        ['Surgeon', 'Date', 'Name', 'Side'].forEach(k => {
+          const match = raw.match(new RegExp(`^${k}[,:]?\\s*([^\\n,]+)`, 'im'));
+          output.push(`• ${k}: ${match ? match[1].trim() : ''}`);
+        });
+        output.push('');
+
+        const addSection = (num, title, body) => {
+          output.push(separator, `📋 ${num}. ${title}`, separator, body || '표 없음', '');
+        };
+        
+        addSection(1, 'Mako Plan (Pre‑op)', planTables[0] ? fmtPlan(planTables[0]) : '표 없음');
+        addSection(2, 'Resection Depth (Pre-op)', resectionTables[0] ? fmtResection(resectionTables[0]) : '표 없음');
+        addSection(3, 'Pre‑Resection Ligament Balance', ligamentTables[0]);
+        addSection(4, 'Final Plan (Intra‑op)', planTables[1] ? fmtPlan(planTables[1]) : '표 없음');
+        addSection(5, 'Resection Depth (Intra-op)', resectionTables[1] ? fmtResection(resectionTables[1]) : '표 없음');
+        addSection(6, 'Post‑Resection Final Ligament Balance', ligamentTables[1]);
+        
+        displayData(output.join('\n'));
+
+      // Handle PDF files
+      } else if (/pdf/i.test(file.type) || /\.pdf$/i.test(file.name)) {
+        const text = await extractPdfText(arrayBuffer);
+        displayData(text || 'PDF에서 텍스트를 추출하지 못했습니다.');
+      } else {
+        throw new Error('지원하지 않는 파일 형식입니다 (DOC, DOCX, PDF만 가능)');
+      }
+    } catch (e) {
+      console.error(e);
+      showError(e.message || '파일 처리 중 오류가 발생했습니다.');
+    } finally {
+      showLoading(false);
+      fileInput.value = ''; // Reset file input to allow re-uploading the same file
+    }
+  };
+  
+  // Event Listeners
+  fileButton.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+  copyButton.addEventListener('click', copyText);
+  downloadButton.addEventListener('click', downloadTxt);
+  
+  // Drag and Drop functionality
+  const dropZone = document.body; // Use the whole body as a drop zone for convenience
+  
+  dropZone.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadCard.classList.add('bg-blue-50', 'border-2', 'border-dashed', 'border-blue-400');
+  });
+  
+  dropZone.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+
+  dropZone.addEventListener('dragleave', (e) => {
+    // Check if the leave event is not triggered by entering a child element
+    if (e.relatedTarget === null || !dropZone.contains(e.relatedTarget)) {
+        e.preventDefault();
+        e.stopPropagation();
+        uploadCard.classList.remove('bg-blue-50', 'border-2', 'border-dashed', 'border-blue-400');
+    }
+  });
+
+  dropZone.addEventListener('drop', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    uploadCard.classList.remove('bg-blue-50', 'border-2', 'border-dashed', 'border-blue-400');
+    const files = e.dataTransfer.files;
+    if (files && files.length > 0) {
+      handleFile(files[0]);
+    }
+  });
+
+</script>
+</body>
+</html>
