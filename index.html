@@ -5,13 +5,10 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>CASE REPORT 추출기</title>
   
-  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- Mammoth.js for DOCX parsing -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.7.0/mammoth.browser.min.js"></script>
   
-  <!-- PDF.js for PDF text extraction -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.15.349/pdf.min.js"></script>
   <script>
     // Set worker source for PDF.js
@@ -33,10 +30,8 @@
 
   <h1 class="text-2xl sm:text-3xl font-bold mb-8 fade-in-down">CASE REPORT 추출기</h1>
 
-  <!-- File Upload Card -->
   <div id="upload-card" class="w-full max-w-md mb-6 shadow-lg rounded-2xl bg-white">
     <div class="py-10 flex flex-col items-center gap-4 text-center">
-      <!-- FileUp Icon (SVG) -->
       <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-blue-600">
         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
         <polyline points="17 8 12 3 7 8"/>
@@ -48,9 +43,7 @@
     </div>
   </div>
 
-  <!-- Status Messages -->
   <div id="loading-indicator" class="hidden flex items-center gap-2 text-blue-600 mb-6">
-    <!-- Loader Icon (SVG) -->
     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="animate-spin">
       <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
     </svg>
@@ -59,20 +52,17 @@
   <p id="error-message" class="hidden text-red-600 mb-6"></p>
   <p id="toast-message" class="hidden text-green-600 mb-6"></p>
 
-  <!-- Result Card -->
   <div id="result-card" class="hidden w-full max-w-3xl shadow-lg rounded-2xl bg-white">
     <div class="p-6">
       <pre id="result-data" class="whitespace-pre-wrap text-sm leading-relaxed max-h-[60vh] overflow-auto mb-4 bg-gray-50 p-4 rounded-md"></pre>
       <div class="flex gap-3">
         <button id="copy-button" class="flex-1 bg-blue-500 text-white rounded-full py-2 px-4 flex items-center justify-center font-semibold hover:bg-blue-600">
-          <!-- Copy Icon (SVG) -->
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2">
             <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
           </svg>
           복사하기
         </button>
         <button id="download-button" class="flex-1 bg-green-500 text-white rounded-full py-2 px-4 flex items-center justify-center font-semibold hover:bg-green-600">
-          <!-- Download Icon (SVG) -->
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="mr-2">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/>
           </svg>
@@ -103,23 +93,114 @@
   const isPlan = (t) => /femur/i.test(t) && /tibia/i.test(t) && /insert/i.test(t);
   const isResection = (t) => /distal femur/i.test(t) && /posterior femur/i.test(t);
 
+  /**
+   * [MODIFIED] Parses a plan table (Mako Plan, Final Plan) from a DOCX file.
+   * This final version uses a precise positional logic based on user's detailed feedback.
+   * It finds anchor keys ('PCA / TEA', 'Rotation') and then finds the varus values
+   * in the cells relatively positioned to those anchors.
+   * @param {HTMLElement} tbl - The HTML table element to parse.
+   * @returns {string} - A formatted string of the extracted plan data.
+   */
   const fmtPlan = (tbl) => {
-    const d = { fem:'', tib:'', ins:'', fv:'', tv:'', pca:'', rot:'', flex:'', slope:'' };
-    Array.from(tbl.querySelectorAll('tr')).slice(1).forEach(r => {
-      const c = Array.from(r.querySelectorAll('td')).map(td => td.textContent.trim());
-      const k = (c[0]||'').toLowerCase();
-      if(k==='femur')  [d.fem,d.fv,d.tv]   = [c[1]||'',c[2]||'',c[3]||''];
-      if(k==='tibia')  [d.tib,d.pca,d.rot] = [c[1]||'',c[2]||'',c[3]||''];
-      if(k==='insert') [d.ins,d.flex,d.slope] = [c[1]||'',c[2]||'',c[3]||''];
+    const dataMap = new Map();
+    const rows = Array.from(tbl.querySelectorAll('tr'));
+    
+    const keyMap = {
+      'femur': ['femur'],
+      'tibia': ['tibia'],
+      'insert': ['insert'],
+      'pca': ['pca / tea', 'pca/tea', 'pca'],
+      'rotation': ['rotation'],
+      'flexion': ['flexion'],
+      'slope': ['posterior slope']
+    };
+
+    const reverseKeyMap = new Map();
+    for (const canonicalName in keyMap) {
+      for (const variant of keyMap[canonicalName]) {
+        reverseKeyMap.set(variant, canonicalName);
+      }
+    }
+
+    // --- POSITIONAL LOGIC (User-guided) ---
+    // Find the exact cell coordinates of our anchor keys.
+    let pcaAnchor = null;
+    let rotationAnchor = null;
+
+    rows.forEach((row, rowIndex) => {
+        const cells = Array.from(row.querySelectorAll('td, th'));
+        cells.forEach((cell, colIndex) => {
+            const cellText = cell.textContent.toLowerCase().trim();
+            if (keyMap.pca.includes(cellText)) {
+                pcaAnchor = { row: rowIndex, col: colIndex };
+            }
+            if (keyMap.rotation.includes(cellText)) {
+                rotationAnchor = { row: rowIndex, col: colIndex };
+            }
+        });
     });
+
+    // Use the anchor positions to find the values based on the user's rule:
+    // "Cell above anchor is the KEY, cell to the RIGHT of that key is the VALUE."
+    if (pcaAnchor && pcaAnchor.row > 0) {
+        const valueRow = rows[pcaAnchor.row - 1];
+        // The value is in the same row as the key, but in the next column.
+        const valueCell = valueRow.querySelectorAll('td, th')[pcaAnchor.col + 1];
+        if (valueCell) {
+            dataMap.set('femurVarus', valueCell.textContent.trim());
+        }
+    }
+    if (rotationAnchor && rotationAnchor.row > 0) {
+        const valueRow = rows[rotationAnchor.row - 1];
+        const valueCell = valueRow.querySelectorAll('td, th')[rotationAnchor.col + 1];
+        if (valueCell) {
+            dataMap.set('tibiaVarus', valueCell.textContent.trim());
+        }
+    }
+    // --- END POSITIONAL LOGIC ---
+
+    // --- GENERAL KEY-VALUE SEARCH LOGIC (as a fallback) ---
+    const allCells = rows.flatMap(row => Array.from(row.querySelectorAll('td, th')).map(td => td.textContent.trim()));
+    
+    for (let i = 0; i < allCells.length; i++) {
+        const potentialKey = allCells[i].toLowerCase().replace(/[:]$/, '').trim();
+        
+        if (reverseKeyMap.has(potentialKey)) {
+            const canonicalName = reverseKeyMap.get(potentialKey);
+            // Don't overwrite values found by the more specific positional logic.
+            if (dataMap.has(canonicalName)) continue;
+
+            if (i + 1 < allCells.length) {
+                const value = allCells[i + 1];
+                const nextCellIsKey = reverseKeyMap.has(value.toLowerCase().replace(/[:]$/, '').trim());
+                
+                if (!nextCellIsKey) {
+                    dataMap.set(canonicalName, value);
+                }
+            }
+        }
+    }
+
+    // Retrieve the data using the canonical names.
+    const femurSize = dataMap.get('femur') || '';
+    const tibiaSize = dataMap.get('tibia') || '';
+    const insertSize = dataMap.get('insert') || '';
+    const femurVarus = dataMap.get('femurVarus') || '';
+    const tibiaVarus = dataMap.get('tibiaVarus') || '';
+    const pca = dataMap.get('pca') || '';
+    const rotation = dataMap.get('rotation') || '';
+    const flexion = dataMap.get('flexion') || '';
+    const slope = dataMap.get('slope') || '';
+
+    // Construct the final output string.
     return [
-      `• Implantation – Femur ${d.fem} | Tibia ${d.tib} | Insert ${d.ins}`,
-      `• Femur varus – ${d.fv}`,
-      `• Tibia varus – ${d.tv}`,
-      `• PCA / TEA – ${d.pca}`,
-      `• Rotation – ${d.rot}`,
-      `• Flexion – ${d.flex}`,
-      `• Posterior Slope – ${d.slope}`
+      `• Implantation – Femur ${femurSize || 'N/A'} | Tibia ${tibiaSize || 'N/A'} | Insert ${insertSize || 'N/A'}`,
+      `• Femur varus – ${femurVarus || 'N/A'}`,
+      `• Tibia varus – ${tibiaVarus || 'N/A'}`,
+      `• PCA / TEA – ${pca || 'N/A'}`,
+      `• Rotation – ${rotation || 'N/A'}`,
+      `• Flexion – ${flexion || 'N/A'}`,
+      `• Posterior Slope – ${slope || 'N/A'}`
     ].join('\n');
   };
 
